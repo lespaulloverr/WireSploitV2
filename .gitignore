@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Local WireSploit data
+/data/
+*.sqlite
+*.sqlite3
+*.db
+
+# Local configuration / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs / runtime output
+*.log
+logs/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Node/frontend caches if the frontend grows
+node_modules/
+dist/
+build/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Local archives / generated packages
+*.zip
+*.tar.gz
