@@ -1,0 +1,4 @@
+# Optional helpers for document and image OCR features.
+# Tesseract OCR executable must also be installed separately for pytesseract.
+pypdf>=5,<6
+pytesseract>=0.3.13,<1
