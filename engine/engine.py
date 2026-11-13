@@ -17,7 +17,10 @@ def cats(kind,srm):
  m={'username':['username','social','search','archives'],'email':['email','social','search','archives','public_records'],'phone':['phone','search','geolocation','public_records'],'domain':['domain','archives','search','public_records'],'ip':['ip','geolocation','search','archives'],'search':['search','social','public_records','archives']}
  out=list(dict.fromkeys(m.get(kind,['search','public_records','archives'])))
  if srm and kind in {'domain','ip'}: out.append('technical')
- return out
+ # Add new categories for extended tool support
+ if kind in {'domain','ip','search'}:
+     out.extend(['vulnerability','reverse_engineering','forensics','network','wireless','database','post_exploitation','credential_access','reporting'])
+ return list(dict.fromkeys(out))
 
 async def provider(pid,cat,target,srm):
  if pid=='native':
@@ -39,8 +42,15 @@ async def provider(pid,cat,target,srm):
  if not cmd: raise FileNotFoundError(f'{spec.name} is not installed or ready')
  if len(cmd)==3:cw,wd,stdin=cmd
  else:cw,wd=cmd;stdin=None
- code,out,err=await tooling.run_subprocess(cw,wd,timeout=90,stdin_text=stdin)
+ code,out,err=await tooling.run_subprocess(cw,wd,timeout=spec.timeout if spec.timeout else 90,stdin_text=stdin)
  if code!=0 and not out:raise RuntimeError(err or f'exit code {code}')
+ # Parser dispatch based on spec.parser
+ parser_name = spec.parser
+ if parser_name:
+     parser_func = getattr(tooling, f'parse_{parser_name}', None)
+     if parser_func:
+         return parser_func(pid, target, out, cat)
+ # Fallback to category-based parsers
  if cat in ('username','social','email') and pid in ('sherlock','maigret','blackbird','gosherlock','socialanalyzer'):return tooling.parse_username_output(pid,target,out,cat)
  if pid in ('subfinder','assetfinder','amass','theharvester','waymore','gau','waybackurls','findomain'):return tooling.parse_domain_lines(pid,target,out,cat)
  return tooling.parse_kv_output(pid,target,out,cat)

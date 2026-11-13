@@ -32,11 +32,14 @@ def test_investigations_list_empty():
     response = client.get("/api/investigations")
     assert response.status_code == 200
     data = response.json()
-    assert isinstance(data, list)
+    assert isinstance(data, dict)
+    assert 'investigations' in data
+    assert 'total' in data
+    assert 'limit' in data
+    assert 'offset' in data
+    assert isinstance(data['investigations'], list)
     # Since we just started, there might be no investigations
     # But note: the database is fresh, so it should be empty
-    # However, we cannot guarantee because of possible leftover data from other tests?
-    # We'll just check that it's a list.
 
 def test_create_investigation_success():
     response = client.post(

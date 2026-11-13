@@ -10,6 +10,10 @@ USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$')
 PHONE_PATTERN = re.compile(r'^[+0-9() .-]*$')
 # URL: must start with http:// or https://
 URL_PATTERN = re.compile(r'^https?://.+', re.I)
+# Person name: require at least two words with first letter capitalized (First Last), allow letters, spaces, hyphens, apostrophes, periods
+PERSON_PATTERN = re.compile(r"^[A-ZÀ-ÿ][a-zÀ-ÿ]*(?:[\s\-\.'’]+[A-ZÀ-ÿ][a-zÀ-ÿ]*)+$")
+# Company name: allow alphanumeric, spaces, common punctuation; at least 2 chars
+COMPANY_PATTERN = re.compile(r'^[A-Za-z0-9\s\-\.\,\&\(\)]{2,200}$')
 
 def validate_username(value: str) -> Tuple[bool, str, Optional[str]]:
     """
@@ -108,17 +112,47 @@ def validate_ip(value: str) -> Tuple[bool, str, Optional[str]]:
     except ValueError:
         return False, "", "Invalid IP address format"
 
+def validate_person(value: str) -> Tuple[bool, str, Optional[str]]:
+    """
+    Validate a person name.
+    Returns (is_valid, normalized_value, error_message)
+    """
+    value = value.strip()
+    if not value:
+        return False, "", "Person name cannot be empty"
+    if not PERSON_PATTERN.match(value):
+        return False, "", "Person name must be 2-100 characters and contain only letters, spaces, hyphens, apostrophes, and periods"
+    # Normalize: title case
+    normalized = ' '.join(word.capitalize() for word in value.split())
+    return True, normalized, None
+
+def validate_company(value: str) -> Tuple[bool, str, Optional[str]]:
+    """
+    Validate a company/organization name.
+    Returns (is_valid, normalized_value, error_message)
+    """
+    value = value.strip()
+    if not value:
+        return False, "", "Company name cannot be empty"
+    if not COMPANY_PATTERN.match(value):
+        return False, "", "Company name must be 2-200 characters and contain only alphanumeric characters, spaces, and common punctuation"
+    # Normalize: title case
+    normalized = ' '.join(word.capitalize() for word in value.split())
+    return True, normalized, None
+
 def classify_and_validate(value: str) -> Tuple[str, bool, str, Optional[str]]:
     """
     Classify and validate an input value.
     Returns (input_type, is_valid, normalized_value, error_message)
-    where input_type is one of: 'username', 'email', 'phone', 'domain', 'url', 'ip', 'search'
+    where input_type is one of: 'username', 'email', 'phone', 'domain', 'url', 'ip', 'person', 'company', 'search'
     """
     value = value.strip()
     if not value:
         return 'search', False, "", "Input cannot be empty"
 
     # Try each validator in order of specificity
+    # Username must be checked before person because person pattern allows similar patterns
+    # Company is NOT included in auto-detect - requires explicit selection
     validators = [
         ('email', validate_email),
         ('phone', validate_phone),
@@ -126,6 +160,7 @@ def classify_and_validate(value: str) -> Tuple[str, bool, str, Optional[str]]:
         ('url', validate_url),
         ('ip', validate_ip),
         ('username', validate_username),
+        ('person', validate_person),
     ]
 
     for input_type, validator in validators:

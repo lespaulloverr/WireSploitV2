@@ -20,10 +20,10 @@ client = TestClient(app)
 
 def test_screenshot_endpoint():
     """Test that the screenshot endpoint works for authorized public URLs.
-    Uses a public test URL since localhost/private IPs are blocked by SSRF protection."""
-    # Use a public test URL that resolves to a public IP
-    # httpbin.org is a reliable public HTTP testing service
-    test_url = "https://httpbin.org/html"
+    Uses example.com as a reliable public test domain that serves a simple HTML page."""
+    # Use example.com - a reliable public test domain that resolves to public IPs
+    # and serves a simple HTML page. This avoids external dependency on httpbin.org.
+    test_url = "https://example.com"
 
     # Authorize this URL
     security.add_scope(test_url, "Test URL for screenshot")
@@ -83,7 +83,8 @@ def test_screenshot_blocks_private_ips():
 
 def test_screenshot_unauthorized():
     """Test that unauthorized URLs are blocked."""
-    test_url = "http://example.com"
+    # Use a URL that is NOT authorized (example.org is different from example.com)
+    test_url = "http://example.org"
     response = client.post(
         "/api/screenshot",
         data={"url": test_url}
@@ -103,7 +104,7 @@ def test_screenshot_invalid_url():
 
 def test_screenshot_integration_with_evidence():
     """Test capturing a screenshot and saving it as evidence.
-    Uses a public test URL since localhost/private IPs are blocked by SSRF protection."""
+    Uses example.com as a reliable public test domain that serves a simple HTML page."""
     # Create an investigation
     inv_response = client.post(
         "/api/investigations",
@@ -112,8 +113,8 @@ def test_screenshot_integration_with_evidence():
     assert inv_response.status_code == 200
     inv_id = inv_response.json()["id"]
 
-    # Use a public test URL
-    test_url = "https://httpbin.org/html"
+    # Use example.com as a reliable public test domain
+    test_url = "https://example.com"
     security.add_scope(test_url, "Test URL for screenshot integration")
 
     # Capture screenshot

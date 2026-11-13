@@ -6,4 +6,7 @@ phonenumbers>=9.0.12,<10
 dnspython>=2.7,<3
 reportlab>=4.4,<5
 Pillow>=11.3,<13
+cryptography>=42.0,<44
+defusedxml>=0.7,<1
+pyyaml>=6.0,<7
 

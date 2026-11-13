@@ -1,12 +1,12 @@
 # WireSploit
 
-**Version:** 4.0.0
+**Version:** 4.0.1
 
 WireSploit is a local-first public-source investigation workspace for Windows 11. It provides a single investigation model, staged identifier discovery, provider isolation, findings/provenance storage, diagnostics, and an additive registry for optional external tools.
 
-V4.0.0 is a **working fresh-slate core release, not the final feature-complete WireSploit specification**. The repository is intentionally open for contributors to improve the application.
+V4.0.1 includes Kali Linux environment detection, Windows executable packaging, and a guided setup wizard.
 
-## What works in V4.0.0
+## What works in V4.0.1
 
 - FastAPI backend with a local SQLite investigation store.
 - Browser-based investigation workspace.
@@ -19,12 +19,15 @@ V4.0.0 is a **working fresh-slate core release, not the final feature-complete W
 - Web-provider adapters and an external-tool registry.
 - Tool diagnostics showing which optional integrations are actually available in the current environment.
 - Explicit SRM authorization state for higher-risk technical modules.
+- **Kali Linux environment detection** (native, WSL2, remote SSH) with automatic tool version scanning.
+- **Windows executable** (`dist/WireSploit.exe`) for home screen/start menu access.
+- **Guided setup wizard** (`setup_wizard.py`) for first-run configuration.
 - Windows `START.cmd` and `START.ps1` launchers.
 - Automated tests for the health endpoint, static files and an end-to-end investigation run using a deterministic provider stub.
 
 ## What is not complete yet
 
-The following parts of the broader WireSploit roadmap are **not complete in V4.0.0**:
+The following parts of the broader WireSploit roadmap are **not complete in V4.0.1**:
 
 - Full evidence-capture workflow, including screenshots.
 - JSON/CSV/HTML/PDF export workflow exposed through the UI.
@@ -34,7 +37,6 @@ The following parts of the broader WireSploit roadmap are **not complete in V4.0
 - Three-day temporary search-history expiry.
 - Complete investigation editing/notes workflow.
 - Fully implemented Low/Balanced/High resource modes.
-- Full installer/setup wizard.
 - A built-in AI/Ollama layer in the V4 core.
 
 See [`docs/roadmap.md`](docs/roadmap.md) for the contributor roadmap.
@@ -63,7 +65,29 @@ Note: Some tools may have specific requirements or may not be compatible with al
 
 ## Quick start on Windows
 
-### Option 1 — double-click launcher
+### Option 1 — Setup Wizard (Recommended for first run)
+
+Run the interactive setup wizard to configure API keys, Kali environment, and create shortcuts:
+
+```powershell
+python setup_wizard.py
+```
+
+### Option 2 — Windows Executable (Fastest startup)
+
+If you have the pre-built executable:
+
+1. Double-click `dist/WireSploit.exe`
+2. The server starts on `http://127.0.0.1:8765`
+3. Browser opens automatically
+
+To build the executable yourself:
+```powershell
+python -m pip install pyinstaller
+pyinstaller wiresploit.spec --clean
+```
+
+### Option 3 — Double-click launcher
 
 1. Install Python 3.
 2. Open this repository folder.
@@ -72,7 +96,7 @@ Note: Some tools may have specific requirements or may not be compatible with al
 
 The CMD launcher starts the server in a separate command window so you can see runtime output while developing.
 
-### Option 2 — PowerShell
+### Option 4 — PowerShell
 
 Run:
 
@@ -126,15 +150,27 @@ The application creates its local SQLite database under `data/`. That directory 
 ```text
 WireSploit/
 ├── .github/workflows/      # CI checks for pull requests and pushes
-├── docs/                   # Architecture, development, providers, tools and roadmap
+├── docs/                   # Documentation
+│   ├── architecture.md     # System architecture
+│   ├── development.md      # Development guide
+│   ├── providers.md        # Provider documentation
+│   ├── tools.md            # Tool integration guide
+│   ├── roadmap.md          # Contributor roadmap
+│   ├── issue-templates.md  # Issue templates
+│   ├── implementation/     # Implementation docs and plans
+│   ├── reports/            # Build, test, and audit reports
+│   └── security/           # Security audits and remediation
 ├── engine/                 # Investigation engine, storage, providers and tool registry
 ├── tests/                  # Automated tests
 ├── web/                    # Browser UI
 ├── main.py                 # FastAPI application and API routes
+├── setup_wizard.py         # Interactive setup wizard
+├── wiresploit.spec         # PyInstaller specification
 ├── START.cmd               # Windows CMD launcher
 ├── START.ps1               # PowerShell launcher
 ├── requirements.txt        # Runtime dependencies
 ├── requirements-dev.txt    # Runtime + development/test dependencies
+├── .env.example            # Environment configuration template
 └── README.md
 ```
 
@@ -192,6 +228,14 @@ No license has been selected for this repository yet. Before publishing a public
 
 ## Current release status
 
-V4.0.0 has been tested for the core application path. The supplied build report records 3 passing automated tests, Python compilation, frontend syntax validation, static-route checks, investigation creation, input creation, deterministic run execution and run polling.
+V4.0.1 has been tested for the core application path. The build includes:
+- 3 passing automated tests
+- Python compilation
+- Frontend syntax validation
+- Static-route checks
+- Investigation creation, input creation, deterministic run execution and run polling
+- Kali environment detection (native, WSL2, SSH)
+- Windows executable packaging (74MB)
+- Setup wizard for first-run configuration
 
 Optional Windows third-party CLI integrations were not claimed as tested in the build environment.

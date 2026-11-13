@@ -47,6 +47,8 @@ _load_local_env(ROOT / '.env')
 from engine import store, engine, tooling, security
 from engine.catalog import WEB_TOOLS
 from engine.awesome_catalog import as_catalog as awesome_catalog
+from engine.credentials import get_vault, CredentialKind
+from engine.kali_env import get_kali_manager, initialize_kali_environment, get_kali_environment_summary, enhance_tool_diagnostics
 WEB = ROOT / 'web'
 store.init()
 
@@ -60,15 +62,32 @@ cleanup_task = None
 @app.on_event("startup")
 async def startup_event():
     global cleanup_task
-    # Install Playwright browsers if not present
-    def install_browsers():
-        try:
-            subprocess.run([sys.executable, "-m", "playwright", "install", "firefox"], check=True, capture_output=True)
-            print("Playwright Firefox browser installed.")
-        except Exception as e:
-            print(f"Failed to install Playwright browsers: {e}")
-    # Run in a thread to avoid blocking the event loop
-    await asyncio.to_thread(install_browsers)
+
+    # Detect if running in PyInstaller bundle
+    is_frozen = getattr(sys, 'frozen', False)
+
+    # Install Playwright browsers if not present (skip in frozen executable)
+    if not is_frozen:
+        def install_browsers():
+            try:
+                subprocess.run([sys.executable, "-m", "playwright", "install", "firefox"], check=True, capture_output=True)
+                print("Playwright Firefox browser installed.")
+            except Exception as e:
+                print(f"Failed to install Playwright browsers: {e}")
+        # Run in a thread to avoid blocking the event loop
+        await asyncio.to_thread(install_browsers)
+    else:
+        print("Running in executable mode - skipping Playwright browser install")
+
+    # Initialize Kali environment detection (non-blocking)
+    try:
+        kali_env = await initialize_kali_environment()
+        print(f"Kali environment detected: {kali_env.env_type.value} - {kali_env.status.value}")
+        if kali_env.status.value == "connected":
+            print(f"  Kali version: {kali_env.version}")
+            print(f"  Hostname: {kali_env.hostname}")
+    except Exception as e:
+        print(f"Kali environment detection failed: {e}")
 
     async def cleanup_loop():
         while True:
@@ -126,6 +145,8 @@ from validation import (
     validate_domain,
     validate_url,
     validate_ip,
+    validate_person,
+    validate_company,
     classify_and_validate,
 )
 
@@ -145,7 +166,7 @@ def require_same_origin(request: Request):
         raise HTTPException(403, 'Cross-origin request rejected')
     return True
 
-ALLOWED_KINDS = {'auto', 'username', 'email', 'phone', 'domain', 'ip', 'search'}
+ALLOWED_KINDS = {'auto', 'username', 'email', 'phone', 'domain', 'ip', 'person', 'company', 'search'}
 
 @app.get('/')
 def home():
@@ -162,8 +183,53 @@ def health():
     }
 
 @app.get('/api/investigations')
-def investigations(_: bool = Depends(require_same_origin)):
-    return store.list_investigations()
+def investigations(
+    search: str = '',
+    status: str = '',
+    limit: int = 50,
+    offset: int = 0,
+    _: bool = Depends(require_same_origin)
+):
+    """List investigations with optional search, filter, and pagination."""
+    # Validate limit
+    limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
+
+    with store.connect() as c:
+        # Build query
+        where_clauses = []
+        params = []
+
+        if search:
+            where_clauses.append('name LIKE ?')
+            params.append(f'%{search}%')
+
+        if status:
+            where_clauses.append('status = ?')
+            params.append(status)
+
+        where_sql = 'WHERE ' + ' AND '.join(where_clauses) if where_clauses else ''
+
+        # Get total count
+        count_query = f'SELECT COUNT(*) as cnt FROM investigations {where_sql}'
+        total = c.execute(count_query, params).fetchone()['cnt']
+
+        # Get paginated results
+        query = f'''
+            SELECT * FROM investigations
+            {where_sql}
+            ORDER BY updated_at DESC
+            LIMIT ? OFFSET ?
+        '''
+        params.extend([limit, offset])
+        rows = c.execute(query, params).fetchall()
+
+        return {
+            'investigations': [dict(r) for r in rows],
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+        }
 
 @app.post('/api/investigations')
 def create(x: Inv, _: bool = Depends(require_same_origin)):
@@ -221,6 +287,10 @@ def add_input(iid: str, x: Input, _: bool = Depends(require_same_origin)):
             is_valid, normalized, error_msg = validate_url(value)
         elif kind == 'ip':
             is_valid, normalized, error_msg = validate_ip(value)
+        elif kind == 'person':
+            is_valid, normalized, error_msg = validate_person(value)
+        elif kind == 'company':
+            is_valid, normalized, error_msg = validate_company(value)
         else:  # 'search' or any other
             is_valid, normalized, error_msg = True, value.lower(), None
         if not is_valid:
@@ -265,8 +335,97 @@ def evidence(iid: str, x: Evidence, _: bool = Depends(require_same_origin)):
     return {'id': store.add_evidence(iid, x.kind, x.title, x.source, x.url, x.description)}
 
 @app.get('/api/tools')
-def tools():
-    return tooling.list_tools()
+def tools(classification: str = None):
+    """Get all tools, optionally filtered by classification (public endpoint)."""
+    ts = tooling.list_tools()
+    if classification:
+        # Filter by classification
+        filtered = []
+        for t in ts:
+            spec = tooling.SPEC_BY_ID.get(t.get('name', '').lower().replace(' ', '_'))
+            if spec and spec.classification.value == classification:
+                filtered.append(t)
+        return filtered
+    return ts
+
+@app.get('/api/tools/classifications')
+def tool_classifications(_: bool = Depends(require_same_origin)):
+    """Get tools grouped by classification."""
+    ts = tooling.list_tools()
+    result = {'executable': [], 'restricted': [], 'educational': []}
+    for t in ts:
+        spec = tooling.SPEC_BY_ID.get(t.get('id'))
+        if spec:
+            cls = spec.classification.value
+            if cls in result:
+                # Add classification info to tool
+                t['classification'] = cls
+                t['kali_category'] = spec.kali_category.value if spec.kali_category else None
+                t['risk_level'] = spec.risk_level
+                t['authorized_only'] = spec.authorized_only
+                t['deep_only'] = spec.deep_only
+                result[cls].append(t)
+    return result
+
+
+class ToolExecuteRequest(BaseModel):
+    tool_id: str
+    target: str
+    deep: bool = False
+    srm_authorized: bool = False
+
+@app.post('/api/tools/execute')
+async def execute_tool(x: ToolExecuteRequest, _: bool = Depends(require_same_origin)):
+    """Execute a specific tool against a target."""
+    spec = tooling.SPEC_BY_ID.get(x.tool_id)
+    if not spec:
+        raise HTTPException(404, 'Tool not found')
+
+    # Check authorization for restricted tools
+    if spec.authorized_only and not x.srm_authorized:
+        raise HTTPException(403, 'This tool requires SRM authorization')
+
+    # Check deep mode requirement
+    if spec.deep_only and not x.deep:
+        raise HTTPException(400, 'This tool requires deep mode to be enabled')
+
+    # Get the command to execute
+    cmd = tooling.tool_command(x.tool_id, x.target, 'domain')  # category defaults to domain for CLI tools
+    if not cmd:
+        raise HTTPException(400, f'{spec.name} is not installed or ready')
+
+    if len(cmd) == 3:
+        cw, wd, stdin = cmd
+    else:
+        cw, wd = cmd
+        stdin = None
+
+    # Execute the command
+    timeout = spec.timeout if spec.timeout else 90
+    code, out, err = await tooling.run_subprocess(cw, wd, timeout=timeout, stdin_text=stdin)
+
+    if code != 0 and not out:
+        raise HTTPException(500, err or f'Exit code {code}')
+
+    # Parse output using the tool's parser
+    parser_name = spec.parser
+    findings = []
+    if parser_name:
+        parser_func = getattr(tooling, f'parse_{parser_name}', None)
+        if parser_func:
+            findings = parser_func(x.tool_id, x.target, out, 'domain')
+    else:
+        # Fallback to category-based parsers
+        findings = tooling.parse_kv_output(x.tool_id, x.target, out, 'domain')
+
+    return {
+        'tool_id': x.tool_id,
+        'target': x.target,
+        'deep': x.deep,
+        'exit_code': code,
+        'output': out[:5000],  # Truncate output
+        'findings': findings
+    }
 
 @app.get('/api/investigations/{iid}/export/json')
 def export_json(iid: str, _: bool = Depends(require_same_origin)):
@@ -781,12 +940,171 @@ async def security_probe(x: Scope, _: bool = Depends(require_same_origin)):
 @app.get('/api/diagnostics')
 def diagnostics(_: bool = Depends(require_same_origin)):
     ts = tooling.list_tools()
+    # Enhance tool diagnostics with Kali environment info
+    for tool in ts:
+        tool_id = tool.get('id')
+        if tool_id:
+            kali_diag = enhance_tool_diagnostics({tool_id: tool.get('diagnostic', {})})
+            if tool_id in kali_diag:
+                tool['diagnostic'] = kali_diag[tool_id]
+
+    ready_count = sum(t.get('diagnostic', {}).get('status') == 'ready' for t in ts)
+
     return {
         'system': platform.platform(),
         'python': sys.version,
         'registered': len(ts),
-        'ready': sum(t.get('diagnostic', {}).get('status') == 'ready' for t in ts),
+        'ready': ready_count,
         'tools': ts,
+        'kali_environment': get_kali_environment_summary(),
+    }
+
+
+@app.get('/api/kali-environment')
+def kali_environment_details(_: bool = Depends(require_same_origin)):
+    """Get detailed Kali environment information."""
+    return get_kali_environment_summary()
+
+
+@app.post('/api/kali-environment/rescan')
+async def kali_environment_rescan(_: bool = Depends(require_same_origin)):
+    """Trigger a rescan of Kali tools."""
+    from engine.kali_env import get_kali_manager
+    manager = get_kali_manager()
+    # Run scan in thread to avoid blocking
+    result = await asyncio.to_thread(manager.scan_tools)
+    return {
+        'ok': True,
+        'scanned': len(result),
+        'tools': {k: {'available': v.available, 'version': v.version, 'error': v.error} for k, v in result.items()}
+    }
+
+
+# ============================================================
+# Credential Vault API Endpoints
+# ============================================================
+
+class CredentialStoreRequest(BaseModel):
+    name: str
+    kind: str
+    secret: str
+    metadata: dict = {}
+
+class CredentialImportRequest(BaseModel):
+    name: str
+    kind: str
+    metadata: dict = {}
+
+@app.get('/api/credentials')
+def list_credentials(kind: str = None, _: bool = Depends(require_same_origin)):
+    """List all credentials (metadata only, no secrets)."""
+    vault = get_vault()
+    return vault.list_credentials(kind)
+
+@app.post('/api/credentials')
+def store_credential(x: CredentialStoreRequest, _: bool = Depends(require_same_origin)):
+    """Store a new credential in the vault."""
+    if not x.name or not x.name.strip():
+        raise HTTPException(400, 'Name cannot be empty')
+    if not x.kind:
+        raise HTTPException(400, 'Kind is required')
+    if not x.secret:
+        raise HTTPException(400, 'Secret cannot be empty')
+    vault = get_vault()
+    credential_id = vault.store(x.name.strip(), x.kind, x.secret, x.metadata)
+    return {'id': credential_id}
+
+@app.get('/api/credentials/{cred_id}')
+def get_credential(cred_id: str, _: bool = Depends(require_same_origin)):
+    """Retrieve a credential (returns secret)."""
+    vault = get_vault()
+    try:
+        secret = vault.retrieve(cred_id)
+        return {'id': cred_id, 'secret': secret}
+    except KeyError:
+        raise HTTPException(404, 'Credential not found')
+    except ValueError as e:
+        raise HTTPException(400, f'Decryption failed: {e}')
+
+@app.delete('/api/credentials/{cred_id}')
+def delete_credential(cred_id: str, _: bool = Depends(require_same_origin)):
+    """Delete a credential from the vault."""
+    vault = get_vault()
+    if not vault.delete(cred_id):
+        raise HTTPException(404, 'Credential not found')
+    return {'ok': True}
+
+@app.get('/api/credentials/{cred_id}/metadata')
+def get_credential_metadata(cred_id: str, _: bool = Depends(require_same_origin)):
+    """Get metadata for a credential (no secret)."""
+    vault = get_vault()
+    meta = vault.get_metadata(cred_id)
+    if not meta:
+        raise HTTPException(404, 'Credential not found')
+    return meta
+
+@app.put('/api/credentials/{cred_id}/metadata')
+def update_credential_metadata(cred_id: str, metadata: dict, _: bool = Depends(require_same_origin)):
+    """Update metadata for a credential."""
+    vault = get_vault()
+    if not vault.update_metadata(cred_id, metadata):
+        raise HTTPException(404, 'Credential not found')
+    return {'ok': True}
+
+@app.post('/api/credentials/import')
+async def import_credential(x: CredentialImportRequest, file: UploadFile = File(...), _: bool = Depends(require_same_origin)):
+    """Import a credential from a file."""
+    if not x.name or not x.name.strip():
+        raise HTTPException(400, 'Name cannot be empty')
+    if not x.kind:
+        raise HTTPException(400, 'Kind is required')
+    vault = get_vault()
+    content = await file.read()
+    secret = content.decode('utf-8', errors='replace')
+    credential_id = vault.store(x.name.strip(), x.kind, secret, x.metadata)
+    return {'id': credential_id}
+
+@app.get('/api/credentials/{cred_id}/export')
+def export_credential(cred_id: str, _: bool = Depends(require_same_origin)):
+    """Export a credential to a file."""
+    vault = get_vault()
+    try:
+        secret = vault.retrieve(cred_id)
+        meta = vault.get_metadata(cred_id)
+        filename = f"{meta.get('name', cred_id) if meta else cred_id}.txt"
+        return StreamingResponse(
+            io.StringIO(secret),
+            media_type='text/plain',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    except KeyError:
+        raise HTTPException(404, 'Credential not found')
+    except ValueError as e:
+        raise HTTPException(400, f'Decryption failed: {e}')
+
+@app.post('/api/credentials/rotate-master-key')
+def rotate_master_key(_: bool = Depends(require_same_origin)):
+    """Rotate the master key (re-encrypt all credentials)."""
+    vault = get_vault()
+    success = vault.rotate_master_key()
+    if not success:
+        raise HTTPException(500, 'Master key rotation failed')
+    return {'ok': True}
+
+# Credential kinds for UI
+@app.get('/api/credential-kinds')
+def get_credential_kinds(_: bool = Depends(require_same_origin)):
+    """Get list of available credential kinds."""
+    return {
+        'kinds': [
+            {'value': CredentialKind.WORDLIST, 'label': 'Wordlist'},
+            {'value': CredentialKind.API_KEY, 'label': 'API Key'},
+            {'value': CredentialKind.HASHCAT_MASK, 'label': 'Hashcat Mask'},
+            {'value': CredentialKind.HYDRA_USERLIST, 'label': 'Hydra Userlist'},
+            {'value': CredentialKind.SSH_KEY, 'label': 'SSH Key'},
+            {'value': CredentialKind.NTLM_HASH, 'label': 'NTLM Hash'},
+            {'value': CredentialKind.GENERIC, 'label': 'Generic'},
+        ]
     }
 
 @app.post('/api/investigations/{iid}/evidence/upload')
@@ -836,13 +1154,13 @@ async def capture_screenshot(url: str = Form(...), _: bool = Depends(require_sam
         # Note: page.route is async, we need to set it up before goto
         await page.route('**/*', handle_route)
 
-        # Navigate with timeout (30 seconds max)
-        await page.goto(validated_url, wait_until="networkidle", timeout=30000)
+        # Navigate with timeout (90 seconds max)
+        await page.goto(validated_url, wait_until="domcontentloaded", timeout=90000)
         # Wait for dynamic content with timeout (5 seconds max)
         await page.wait_for_timeout(5000)
 
-        # Take screenshot with size limit (max 10MB)
-        screenshot_bytes = await page.screenshot(full_page=True)
+        # Take screenshot with size limit (max 10MB) and longer timeout for full page
+        screenshot_bytes = await page.screenshot(full_page=True, timeout=60000)
         if len(screenshot_bytes) > 10 * 1024 * 1024:  # 10MB limit
             raise HTTPException(413, 'Screenshot exceeds maximum size limit (10MB)')
         await browser.close()
@@ -921,3 +1239,9 @@ def delete_investigation_note_endpoint(nid: str, _: bool = Depends(require_same_
     if not success:
         raise HTTPException(404, 'Note not found')
     return {'id': nid}
+
+
+if __name__ == '__main__':
+    import uvicorn
+    # When running as PyInstaller executable, use the app object directly
+    uvicorn.run(app, host=config['HOST'], port=config['PORT'], reload=False)

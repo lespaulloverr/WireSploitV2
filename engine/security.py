@@ -320,7 +320,7 @@ async def limited_authorized_probe(target: str):
     }
 
 
-async def validate_screenshot_url(url: str, timeout=12, max_redirects=3):
+async def validate_screenshot_url(url: str, timeout=30, max_redirects=3):
     """
     Validate a URL for screenshot capture to prevent SSRF.
     Checks:

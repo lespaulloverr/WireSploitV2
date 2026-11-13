@@ -1,6 +1,80 @@
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
+# =============================================================================
+# WireSploit Launcher - Checks for executable first, falls back to Python
+# =============================================================================
+
+# Check if pre-built executable exists
+$exePath = Join-Path $PSScriptRoot 'dist\WireSploit.exe'
+if (Test-Path -LiteralPath $exePath) {
+    Write-Host "Found WireSploit executable. Starting..." -ForegroundColor Green
+
+    $pidFile = Join-Path $PSScriptRoot 'wiresploit.pid'
+    $host = '127.0.0.1'
+    $port = 8765
+    $timeout = 30
+    $interval = 1
+    $maxRetries = 30
+
+    # Check for stale PID file
+    if (Test-Path -LiteralPath $pidFile) {
+        $oldPid = Get-Content -LiteralPath $pidFile
+        $proc = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+        if ($proc -and $proc.Path -like '*WireSploit*') {
+            Write-Host "Warning: Stale WireSploit process found (PID: $oldPid). Stopping it..." -ForegroundColor Yellow
+            Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    }
+
+    # Start executable and capture PID
+    Write-Host "Starting WireSploit server..." -ForegroundColor Green
+    $proc = Start-Process -FilePath $exePath -WorkingDirectory $PSScriptRoot -PassThru
+
+    if (-not $proc) {
+        Write-Host "Error: Failed to start WireSploit executable." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Server started with PID: $($proc.Id)" -ForegroundColor Cyan
+    $proc.Id | Set-Content -LiteralPath $pidFile -Force
+
+    # Wait for server to be ready
+    $ready = $false
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not $ready) {
+        if ($proc.HasExited) {
+            throw "WireSploit server exited with code $($proc.ExitCode)."
+        }
+        if ($stopwatch.Elapsed.TotalSeconds -ge $timeout) {
+            throw "WireSploit did not become ready within $timeout seconds."
+        }
+        try {
+            $response = Invoke-WebRequest -Uri "http://$host:$port/api/health" -UseBasicParsing -TimeoutSec 1
+            if ($response.StatusCode -eq 200) {
+                $ready = $true
+            }
+        } catch {
+            Start-Sleep -Milliseconds ($interval * 1000)
+        }
+    }
+
+    # Server is ready
+    Write-Host "WireSploit is ready at http://$host:$port/" -ForegroundColor Green
+    Start-Process "http://$host:$port/"
+
+    # Wait for the server process to exit
+    Wait-Process -Id $proc.Id
+
+    # Cleanup
+    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    exit 0
+}
+
+# =============================================================================
+# Fall back to Python/virtual environment
+# =============================================================================
+
 # Check for Python
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Host 'Error: Python 3 is required but not found in PATH.' -ForegroundColor Red

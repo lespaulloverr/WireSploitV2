@@ -203,6 +203,26 @@ def verify_evidence_hash(eid):
     # Compute actual hash
     actual_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
     return (actual_hash == expected_hash, expected_hash, actual_hash)
+def add_finding(rid, category, provider, finding):
+    """Add a finding to the database for a specific run.
+    finding dict should contain: entity_key, value, url, platform, source_tools, evidence, confidence, exact_match"""
+    fid = str(uuid.uuid4())
+    t = now()
+    # Extract fields from finding dict with defaults
+    entity_key = finding.get('entity_key') or finding.get('platform', 'unknown') + ':' + str(finding.get('value', ''))
+    value = finding.get('value') or finding.get('platform', '')
+    url = finding.get('url')
+    confidence = finding.get('confidence', 0.5)
+    exact_match = int(finding.get('evidence', {}).get('exact_match', finding.get('exact_match', True)))
+    # Convert evidence dict to JSON string
+    evidence_json = json.dumps(finding.get('evidence', {}))
+    with connect() as c:
+        c.execute('''
+            INSERT OR IGNORE INTO findings(id, run_id, category, provider, entity_key, value, url, confidence, exact_match, evidence_json, created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        ''', (fid, rid, category, provider, entity_key, value, url, confidence, exact_match, evidence_json, t))
+    return fid
+
 def findings_for(i):
     return [dict(r) for r in rows('SELECT f.* FROM findings f JOIN runs r ON r.id=f.run_id WHERE r.investigation_id=? ORDER BY f.created_at',(i,))]
 def evidence_for(i):return [dict(r) for r in rows('SELECT * FROM evidence WHERE investigation_id=? ORDER BY created_at DESC',(i,))]
